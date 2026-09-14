@@ -1,0 +1,84 @@
+name: Patch AI Automation Dashboard
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/patch-ai-dashboard.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout live Pages branch
+        uses: actions/checkout@v6
+        with:
+          ref: gh-pages
+          fetch-depth: 0
+      - name: Replace manual OpenAI controls with automation dashboard
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('app.js')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace("ai:'AI / 开发客户'", "ai:'AI 自动开发'")
+          s = s.replace("ai:'AI / Outreach'", "ai:'AI Automation'")
+
+          new_ai = r'''async function ai(){
+            const d=await api('/api/leads'),items=d.items||[];
+            const exact=st=>items.filter(x=>x.status===st).length;
+            const engaged=items.filter(x=>['Replied','Qualified','Quoted','Sample','Negotiation','Won'].includes(x.status)).length;
+            const recent24=items.filter(x=>x.created_at&&Date.now()-new Date(x.created_at).getTime()<=86400000).length;
+            const recent=items.slice(0,10);
+            const when=v=>{if(!v)return '-';try{return new Date(v).toLocaleString(LANG==='zh'?'zh-CN':'en-AU',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}catch{return '-'}};
+            const zh=LANG==='zh';
+            el('view').innerHTML=`
+              <div class="ok"><b>${zh?'AI 自动开发已开启':'AI automation is active'}</b><br>${zh?'不需要在网页填写 OpenAI API Key。系统会通过后台任务开发客户并把结果同步到云端 CRM。':'No OpenAI API key is required in this web app. Background tasks develop prospects and sync results to the cloud CRM.'}</div>
+              <div class="grid">
+                <div class="metric"><span class="muted">${zh?'客户总数':'Total leads'}</span><b>${fmt(items.length)}</b></div>
+                <div class="metric"><span class="muted">${zh?'最近24小时新增':'Added in 24h'}</span><b>${fmt(recent24)}</b></div>
+                <div class="metric"><span class="muted">${zh?'已产生互动':'Engaged'}</span><b>${fmt(engaged)}</b></div>
+                <div class="metric"><span class="muted">${zh?'已成交':'Won'}</span><b>${fmt(exact('Won'))}</b></div>
+              </div>
+              <div class="panel">
+                <h3>${zh?'自动运行计划':'Automation schedule'}</h3>
+                <div class="row">
+                  <div class="field"><span class="muted">${zh?'新客户开发':'Lead generation'}</span><b>${zh?'每天 10–20 个高匹配客户':'10–20 high-fit prospects daily'}</b></div>
+                  <div class="field"><span class="muted">${zh?'邮件/回复同步':'Email & reply sync'}</span><b>${zh?'每小时检查一次':'Checked hourly'}</b></div>
+                  <div class="field"><span class="muted">${zh?'看板刷新':'Dashboard refresh'}</span><b>${zh?'每 30 秒自动刷新':'Auto-refresh every 30 sec'}</b></div>
+                </div>
+                <p class="small muted">${zh?'重点市场：澳大利亚、美国、英国、加拿大。客户回复、报价、样品、谈判和成交进度会持续写入 CRM。':'Priority markets: Australia, US, UK and Canada. Replies, quotes, samples, negotiations and wins are continuously reflected in the CRM.'}</p>
+              </div>
+              <div class="panel tablewrap">
+                <div class="row" style="justify-content:space-between;align-items:center"><h3>${zh?'最新客户进度':'Latest lead activity'}</h3><button class="btn secondary" onclick="go('leads')">${zh?'查看全部客户':'View all leads'}</button></div>
+                <table><thead><tr><th>${t('company')}</th><th>${t('country')}</th><th>${t('status')}</th><th>${zh?'来源':'Source'}</th><th>${zh?'加入时间':'Added'}</th></tr></thead><tbody>${recent.length?recent.map(x=>`<tr><td><b>${esc(x.company)}</b></td><td>${esc(x.country)}</td><td>${esc(ts(x.status))}</td><td>${esc(x.source||'-')}</td><td>${esc(when(x.created_at))}</td></tr>`).join(''):`<tr><td colspan="5" class="empty">${t('nodata')}</td></tr>`}</tbody></table>
+              </div>`
+          }'''
+
+          pattern = r"async function ai\(\)\{.*?(?=async function settings\(\))"
+          s2, n = re.subn(pattern, new_ai + "\n", s, count=1, flags=re.S)
+          if n != 1:
+              raise SystemExit('Could not find AI section to replace')
+
+          marker = '// TRONSUN_LIVE_REFRESH'
+          if marker not in s2:
+              s2 += "\n" + marker + "\nsetInterval(()=>{if(TOKEN&&!document.hidden&&!el('appBox').classList.contains('hide')&&(PAGE==='dashboard'||PAGE==='ai'))render()},30000);\n"
+
+          p.write_text(s2, encoding='utf-8')
+          print('Patched app.js successfully')
+          PY
+      - name: Commit live dashboard update
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.js
+          if git diff --cached --quiet; then
+            echo "No changes needed"
+          else
+            git commit -m "Show AI automation progress without API key"
+            git push origin HEAD:gh-pages
+          fi
